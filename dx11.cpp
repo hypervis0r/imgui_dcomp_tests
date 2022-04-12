@@ -1,60 +1,68 @@
 #include "dx11.hpp"
 
-ID3D11Device* g_pd3dDevice = NULL;
+ComPtr<ID3D11Device> g_pd3dDevice = NULL;
+ComPtr<IDXGIDevice> g_pdxgiDevice = NULL;
 ID3D11DeviceContext* g_pd3dDeviceContext = NULL;
-IDXGISwapChain* g_pSwapChain = NULL;
+ComPtr<IDXGISwapChain1> g_pSwapChain = NULL;
 ID3D11RenderTargetView* g_mainRenderTargetView = NULL;
+ComPtr<IDCompositionDesktopDevice> g_pdcompDevice = NULL;
+ComPtr<IDCompositionDevice3> g_pdcompDevice3 = NULL;
+
+void HR(HRESULT const result)
+{
+	if (S_OK != result)
+	{
+		throw ComException(result);
+	}
+}
 
 bool CreateDeviceD3D(HWND hWnd)
 {
 	// Setup swap chain
-	DXGI_SWAP_CHAIN_DESC sd;
-	ZeroMemory(&sd, sizeof(sd));
-	sd.BufferCount = 2;
-	sd.BufferDesc.Width = 0;
-	sd.BufferDesc.Height = 0;
-	sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-	sd.BufferDesc.RefreshRate.Numerator = 75;
-	sd.BufferDesc.RefreshRate.Denominator = 1;
-	sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
-	sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-	sd.OutputWindow = hWnd;
-	sd.SampleDesc.Count = 1;
-	sd.SampleDesc.Quality = 0;
-	sd.Windowed = TRUE;
-	sd.SwapEffect = DXGI_SWAP_EFFECT_SEQUENTIAL;
+	HR(D3D11CreateDevice(nullptr,    // Adapter
+		D3D_DRIVER_TYPE_HARDWARE,
+		nullptr,    // Module
+		D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+		nullptr, 0, // Highest available feature level
+		D3D11_SDK_VERSION,
+		&g_pd3dDevice,
+		nullptr,    // Actual feature level
+		&g_pd3dDeviceContext));  // Device context
 
-	UINT createDeviceFlags = 0;
-	//createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
-	D3D_FEATURE_LEVEL featureLevel;
-	const D3D_FEATURE_LEVEL featureLevelArray[2] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0, };
-	if (D3D11CreateDeviceAndSwapChain(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, createDeviceFlags, featureLevelArray, 2, D3D11_SDK_VERSION, &sd, &g_pSwapChain, &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext) != S_OK)
-		return false;
+	HR(g_pd3dDevice.As(&g_pdxgiDevice));
 
-	/*D3D11_BLEND_DESC blendDesc = {};
+	ComPtr<IDXGIFactory2> dxFactory;
+	HR(CreateDXGIFactory2(
+		DXGI_CREATE_FACTORY_DEBUG,
+		__uuidof(dxFactory),
+		reinterpret_cast<void**>(dxFactory.GetAddressOf())));
 
-	blendDesc.AlphaToCoverageEnable = false;
-	blendDesc.RenderTarget[0].BlendEnable = true;
+	DXGI_SWAP_CHAIN_DESC1 description = {};
+	description.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+	description.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+	description.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+	description.BufferCount = 2;
+	description.SampleDesc.Count = 1;
+	description.SampleDesc.Quality = 0;
+	description.AlphaMode = DXGI_ALPHA_MODE_PREMULTIPLIED;
+	description.Scaling = DXGI_SCALING_STRETCH;
 
-	blendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
-	blendDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
-	blendDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+	RECT rect = {};
+	GetClientRect(hWnd, &rect);
+	description.Width = rect.right - rect.left;
+	description.Height = rect.bottom - rect.top;
 
-	blendDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
-	blendDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
-	blendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+	HR(dxFactory->CreateSwapChainForComposition(g_pdxgiDevice.Get(),
+		&description,
+		nullptr, // Don’t restrict
+		g_pSwapChain.GetAddressOf()));
 
+	HR(DCompositionCreateDevice3(
+		g_pdxgiDevice.Get(),
+		__uuidof(g_pdcompDevice),
+		reinterpret_cast<void**>(g_pdcompDevice.GetAddressOf())));
 
-	blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-
-	ID3D11BlendState* bs = NULL;
-
-
-	g_pd3dDevice->CreateBlendState(&blendDesc, &bs);
-
-	float blendFactor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-
-	g_pd3dDeviceContext->OMSetBlendState(bs, blendFactor, 0xffffffff);*/
+	HR(g_pdcompDevice->QueryInterface(__uuidof(IDCompositionDevice3), &g_pdcompDevice3));
 
 	CreateRenderTarget();
 	return true;
@@ -63,9 +71,9 @@ bool CreateDeviceD3D(HWND hWnd)
 void CleanupDeviceD3D()
 {
 	CleanupRenderTarget();
-	if (g_pSwapChain) { g_pSwapChain->Release(); g_pSwapChain = NULL; }
+	if (g_pSwapChain) { g_pSwapChain->Release(); }
 	if (g_pd3dDeviceContext) { g_pd3dDeviceContext->Release(); g_pd3dDeviceContext = NULL; }
-	if (g_pd3dDevice) { g_pd3dDevice->Release(); g_pd3dDevice = NULL; }
+	if (g_pd3dDevice) { g_pd3dDevice->Release(); }
 }
 
 void CreateRenderTarget()

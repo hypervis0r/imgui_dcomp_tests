@@ -1,7 +1,7 @@
 ﻿#include <imgui.h>
 #include <stdio.h>
 #include <imgui_impl_win32.h>
-#include <imgui_impl_dx11.h>
+#include "imgui_impl_dx11.h"
 #include <Windows.h>
 #include <d3d11.h>
 #include <tchar.h>
@@ -18,27 +18,12 @@
 
 #pragma comment(lib, "D3D11.lib")
 
-enum AccentState
-{
-	ACCENT_DISABLED = 0,
-	ACCENT_ENABLE_GRADIENT = 1,
-	ACCENT_ENABLE_TRANSPARENTGRADIENT = 2,
-	ACCENT_ENABLE_BLURBEHIND = 3,
-	ACCENT_ENABLE_ACRYLICBLURBEHIND = 4,
-	ACCENT_INVALID_STATE = 5
-};
-
-struct AccentPolicy
-{
-	AccentState AccentState;
-	unsigned int AccentFlags;
-	unsigned int GradientColor;
-	unsigned int AnimationId;
-};
-
 // Data
 static bool g_toolActive = true;
 static float my_color[4] = { 0. };
+static ImVec4 clear_color = ImVec4(0.f, 0.f, 0.f, 1.f);
+static ComPtr<IDCompositionGaussianBlurEffect> blur;
+static float blur_amount = 0.f;
 
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 void RenderFrame(HWND hwnd, bool* my_tool_active);
@@ -94,6 +79,7 @@ LRESULT WINAPI WndProc(HWND handle, UINT message, WPARAM w_param, LPARAM l_param
 	*/
 	switch (message)
 	{
+	case WM_MOVE:
 	case WM_PAINT:
 		RenderFrame(handle, &g_toolActive);
 		break;
@@ -129,6 +115,18 @@ LRESULT WINAPI WndProc(HWND handle, UINT message, WPARAM w_param, LPARAM l_param
 		return 0;
 	}
 	case WM_CREATE: {
+		// Initialize Direct3D
+		if (!CreateDeviceD3D(handle))
+		{
+			CleanupDeviceD3D();
+			//::UnregisterClass(wc.lpszClassName, wc.hInstance);
+			return 1;
+		}
+
+		// Setup Platform/Renderer backends
+		ImGui_ImplWin32_Init(handle);
+		ImGui_ImplDX11_Init(g_pd3dDevice.Get(), g_pd3dDeviceContext);
+
 		RECT size_rect;
 		GetWindowRect(handle, &size_rect);
 
@@ -141,17 +139,6 @@ LRESULT WINAPI WndProc(HWND handle, UINT message, WPARAM w_param, LPARAM l_param
 			SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE
 		);
 
-		// Initialize Direct3D
-		if (!CreateDeviceD3D(handle))
-		{
-			CleanupDeviceD3D();
-			//::UnregisterClass(wc.lpszClassName, wc.hInstance);
-			return 1;
-		}
-
-		// Setup Platform/Renderer backends
-		ImGui_ImplWin32_Init(handle);
-		ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 		break;
 	}
 	case WM_NCHITTEST: {
@@ -192,29 +179,6 @@ LRESULT WINAPI WndProc(HWND handle, UINT message, WPARAM w_param, LPARAM l_param
 	}
 	case WM_NCLBUTTONDBLCLK:
 		return 0;
-	// Map button clicks to the right messages for the window
-	case WM_NCLBUTTONDOWN: {
-		/*io.MouseDown[0] = true;
-		ImGui::Render();
-		printf("my ass\n");*/
-		POINTS l = *(POINTS*)&l_param;
-
-		//LRESULT a = SendMessageA(handle, WM_LBUTTONDOWN, MK_LBUTTON, MAKELONG(l.x, l.y));
-
-		::DefWindowProc(handle, message, w_param, l_param);
-
-		//ReleaseCapture();
-		return 0;
-	}
-	case WM_NCLBUTTONUP: {
-		/*io.MouseDown[0] = true;
-		ImGui::Render();
-		printf("my ass\n");*/
-		POINTS l = *(POINTS*)&l_param;
-
-		//LRESULT a = SendMessageA(handle, WM_LBUTTONUP, MK_LBUTTON, MAKELONG(l.x, l.y));
-		break;
-	}
 	case WM_NCMOUSEMOVE:
 		POINTS l = *(POINTS*)&l_param;
 		SendMessageA(handle, WM_MOUSEMOVE, 0, MAKELONG(l.x, l.y));
@@ -237,12 +201,9 @@ LRESULT WINAPI WndProc(HWND handle, UINT message, WPARAM w_param, LPARAM l_param
 
 void RenderFrame(HWND hwnd, bool* my_tool_active)
 {
-	ImVec4 clear_color = ImVec4(0.f, 0.f, 0.f, 0.f);
 	RECT main_window_rect = { 0 };
 	LONG main_window_width = 0;
 	LONG main_window_height = 0;
-
-	//SetLayeredWindowAttributes(hwnd, RGB(0, 0, 0), RGB(255, 255, 255), LWA_COLORKEY | LWA_ALPHA);
 
 	POINT ptSrc = { 0,0 };
 
@@ -251,21 +212,6 @@ void RenderFrame(HWND hwnd, bool* my_tool_active)
 	main_window_width = main_window_rect.right - main_window_rect.left;
 	main_window_height = main_window_rect.bottom - main_window_rect.top;
 	SIZE wndSize = { main_window_width, main_window_height };
-
-	//HDC hdcScreen = GetDC(NULL);
-	//HDC hdcWindow = GetDC(hwnd);
-	//HDC hdcWindowMem = CreateCompatibleDC(hdcWindow);
-	//HBITMAP memBitmap = ::CreateCompatibleBitmap(hdcWindow, main_window_width, main_window_height);
-	//HGDIOBJ hOldBmp = SelectObject(hdcWindowMem, memBitmap);
-	//BitBlt(hdcWindowMem, 0, 0, main_window_width, main_window_height, hdcWindow, 0, 0, SRCCOPY);
-	////SelectObject(hdcWindowMem, hOldBmp);
-
-	//BLENDFUNCTION blend = { AC_SRC_OVER, 0,  0, AC_SRC_ALPHA };
-	//UpdateLayeredWindow(hwnd, hdcScreen, &ptSrc, &wndSize, hdcWindowMem, &ptSrc, RGB(0, 0, 0), &blend, ULW_ALPHA);
-
-	//DeleteDC(hdcWindowMem);
-	//ReleaseDC(hwnd, hdcWindow);
-	//DeleteObject(memBitmap);
 
 	// Start the Dear ImGui frame
 	ImGui_ImplDX11_NewFrame();
@@ -288,6 +234,9 @@ void RenderFrame(HWND hwnd, bool* my_tool_active)
 		ImGui::EndMenuBar();
 	}
 
+	ImGui::SliderFloat4("DirectX Clear Screen Color", &clear_color.x, 0.0f, 1.0f);
+	ImGui::SliderFloat("DirectComposition gaussian blur", &blur_amount, 0.f, 100.f);
+
 	ImGui::Begin("Funny Sub-Window", NULL);
 	ImVec2 sub_pos = ImGui::GetWindowPos();
 
@@ -303,8 +252,7 @@ void RenderFrame(HWND hwnd, bool* my_tool_active)
 	ImGui::ColorEdit4("Color", my_color);
 
 	// Plot some values
-	const float my_values[] = { 0.2f, 0.1f, 1.0f, 0.5f, 0.9f, 2.2f };
-	ImGui::PlotLines("Frame Times", my_values, IM_ARRAYSIZE(my_values));
+	ImGui::Text("FPS: %f", ImGui::GetIO().Framerate);
 
 	// Display contents in a scrolling region
 	ImGui::TextColored(ImVec4(1, 1, 0, 1), "Current Main Window Size");
@@ -312,14 +260,51 @@ void RenderFrame(HWND hwnd, bool* my_tool_active)
 	ImGui::Text("Height: %d", main_window_height);
 	ImGui::End();
 
+	/*
+		Render ImGUI shit
+	*/
 	ImGui::Render();
 	const float clear_color_with_alpha[4] = { clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w };
 	g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, NULL);
 	g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color_with_alpha);
 	ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
+	/*
+		Render DirectComposition shit
+	*/
+	ComPtr<IDCompositionTarget> target;
+	HR(g_pdcompDevice->CreateTargetForHwnd(hwnd,
+		TRUE, // Top most
+		target.GetAddressOf()));
+
+	ComPtr<IDCompositionVisual2> visual;
+	HR(g_pdcompDevice3->CreateVisual(visual.GetAddressOf()));
+
+	HR(visual->SetContent(g_pSwapChain.Get()));
+
+	g_pdcompDevice3->CreateGaussianBlurEffect(blur.GetAddressOf());
+	HR(blur->SetStandardDeviation(blur_amount));
+	HR(visual->SetEffect(blur.Get()));
+
+	HR(target->SetRoot(visual.Get()));
+	HR(g_pdcompDevice->Commit());
+
 	g_pSwapChain->Present(1, 0); // Present with vsync
 	//g_pSwapChain->Present(0, 0); // Present without vsync
+
+	DwmFlush();
+}
+
+void RGBA2BGRA(ImVec4 *vec)
+{
+	ImVec4 tmp;
+
+	tmp.x = vec->z;
+	tmp.y = vec->y;
+	tmp.z = vec->x;
+	tmp.w = vec->w;
+
+	memcpy(vec, &tmp, sizeof(ImVec4));
 }
 
 int main(void)
@@ -341,8 +326,14 @@ int main(void)
 	ImGui::GetStyle().PopupRounding = 0.0f;
 	ImGui::GetStyle().ScrollbarRounding = 0.0f;
 	ImGui::GetStyle().Colors[ImGuiCol_TitleBgActive] = ImGui::GetStyle().Colors[ImGuiCol_TitleBg];
-	ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
-	//ImGui::StyleColorsClassic();
+
+	/*
+		Dumb hack
+	*/
+	for (int i = 0; i < ImGuiCol_COUNT; i++)
+	{
+		ImGui::GetStyle().Colors[i].w = 1.;
+	}
 	
 	// Create application window
 	//ImGui_ImplWin32_EnableDpiAwareness();
@@ -357,18 +348,7 @@ int main(void)
 		| WS_MINIMIZEBOX  // Add minimize button to support minimizing by clicking on the taskbar icon
 		| WS_VISIBLE;     // Make window visible after it is created (not important)
 
-	HWND hwnd = ::CreateWindowExW(WS_EX_APPWINDOW, wc.lpszClassName, _T("Dear ImGui DirectX11 Example"), window_style, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 800, NULL, NULL, NULL, NULL);
-	//SetWindowLong(hwnd, GWL_STYLE, WS_THICKFRAME); //remove all window styles, check MSDN for details
-	
-	
-	SetWindowLong(hwnd, GWL_EXSTYLE, WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP);
-	//SetLayeredWindowAttributes(hwnd, RGB(0, 0, 0), 255, LWA_COLORKEY);
-
-	/*struct AccentPolicy accent = { };
-	accent.AccentState = ACCENT_ENABLE_ACRYLICBLURBEHIND;
-	accent.GradientColor = (50 << 24) | (0x990000 & 0xFFFFFF);;
-
-	DwmSetWindowAttribute(hwnd, 19, &accent, sizeof(accent));*/
+	HWND hwnd = ::CreateWindowExW(WS_EX_APPWINDOW | WS_EX_NOREDIRECTIONBITMAP, wc.lpszClassName, _T("Dear ImGui DirectX11 Example"), window_style, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 800, NULL, NULL, NULL, NULL);
 
 	// Our state
 	bool show_demo_window = true;
