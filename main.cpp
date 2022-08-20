@@ -79,19 +79,12 @@ LRESULT WINAPI WndProc(HWND handle, UINT message, WPARAM w_param, LPARAM l_param
 	*/
 	switch (message)
 	{
-	case WM_MOVE:
+	case WM_ERASEBKGND:
+		return 1;
+	case WM_WINDOWPOSCHANGED:
 	case WM_PAINT:
 		RenderFrame(handle, &g_toolActive);
-		break;
-	case WM_SIZE:
-		if (g_pd3dDevice != NULL && w_param != SIZE_MINIMIZED)
-		{
-			CleanupRenderTarget();
-			g_pSwapChain->ResizeBuffers(0, LOWORD(l_param), HIWORD(l_param), DXGI_FORMAT_UNKNOWN, 0);
-			CreateRenderTarget();
-
-			RedrawWindow(handle, NULL, NULL, RDW_UPDATENOW | RDW_ALLCHILDREN);
-		}
+		ValidateRect(handle, NULL);
 		return 0;
 	case WM_NCCALCSIZE: {
 		if (!w_param) return DefWindowProc(handle, message, w_param, l_param);
@@ -110,6 +103,18 @@ LRESULT WINAPI WndProc(HWND handle, UINT message, WPARAM w_param, LPARAM l_param
 
 		if (win32_window_is_maximized(handle)) {
 			requested_client_rect->top += padding;
+		}
+
+		/*
+			Resize and render a new frame with the new size
+		*/
+		if (g_pd3dDevice != NULL)
+		{
+			CleanupRenderTarget();
+			g_pSwapChain->ResizeBuffers(0, requested_client_rect->right - requested_client_rect->left, requested_client_rect->bottom - requested_client_rect->top, DXGI_FORMAT_UNKNOWN, 0);
+			CreateRenderTarget();
+
+			RedrawWindow(handle, NULL, NULL, RDW_UPDATENOW | RDW_ALLCHILDREN);
 		}
 
 		return 0;
@@ -139,7 +144,7 @@ LRESULT WINAPI WndProc(HWND handle, UINT message, WPARAM w_param, LPARAM l_param
 			SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE
 		);
 
-		break;
+		return 0;
 	}
 	case WM_NCHITTEST: {
 		// Let the default procedure handle resizing areas
@@ -260,14 +265,9 @@ void RenderFrame(HWND hwnd, bool* my_tool_active)
 	ImGui::Text("Height: %d", main_window_height);
 	ImGui::End();
 
-	/*
-		Render ImGUI shit
-	*/
-	ImGui::Render();
 	const float clear_color_with_alpha[4] = { clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w };
 	g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, NULL);
 	g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color_with_alpha);
-	ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
 	/*
 		Render DirectComposition shit
@@ -277,17 +277,31 @@ void RenderFrame(HWND hwnd, bool* my_tool_active)
 		TRUE, // Top most
 		target.GetAddressOf()));
 
-	ComPtr<IDCompositionVisual2> visual;
-	HR(g_pdcompDevice3->CreateVisual(visual.GetAddressOf()));
+	ComPtr<IDCompositionVisual2> bg_visual;
+	HR(g_pdcompDevice3->CreateVisual(bg_visual.GetAddressOf()));
 
-	HR(visual->SetContent(g_pSwapChain.Get()));
+	HR(bg_visual->SetContent(g_pSwapChain.Get()));
 
 	g_pdcompDevice3->CreateGaussianBlurEffect(blur.GetAddressOf());
 	HR(blur->SetStandardDeviation(blur_amount));
-	HR(visual->SetEffect(blur.Get()));
+	HR(bg_visual->SetEffect(blur.Get()));
 
-	HR(target->SetRoot(visual.Get()));
+	/*
+		Render ImGUI shit
+	*/
+	ImGui::Render();
+	ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+	
+	ComPtr<IDCompositionVisual2> imgui_visual;
+	HR(g_pdcompDevice3->CreateVisual(imgui_visual.GetAddressOf()));
+
+	HR(imgui_visual->SetContent(g_pSwapChain.Get()));
+
+	//imgui_visual->AddVisual(bg_visual.Get(), FALSE, NULL);
+
+	HR(target->SetRoot(bg_visual.Get()));
 	HR(g_pdcompDevice->Commit());
+
 
 	g_pSwapChain->Present(1, 0); // Present with vsync
 	//g_pSwapChain->Present(0, 0); // Present without vsync
